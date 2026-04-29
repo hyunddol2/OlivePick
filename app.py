@@ -11,19 +11,25 @@ HEADERS = {"ngrok-skip-browser-warning": "true"}
 
 # 구글 드라이브 링크 변환 및 기본 이미지 처리 함수
 def get_displayable_image_url(url):
+    if not url:
+        return "https://via.placeholder.com/150?text=No+Image"
+    
     url_str = str(url).strip()
-    if not url or url_str in ["", "0", "null", "None", "nan"]:
-        return "no_image.png"
-
+    
+    # 구글 드라이브 링크 처리
     if "drive.google.com" in url_str:
-        match = re.search(r'(?:id=|/file/d/)([a-zA-Z0-9_-]+)', url_str)
-        if match:
-            file_id = match.group(1)
-            return f"https://drive.google.com/thumbnail?id={file_id}&sz=w400"
-
-    if not url_str.startswith("http"):
-        return "no_image.png"
-
+        file_id = ""
+        # 케이스 1: id=... 형태
+        if "id=" in url_str:
+            file_id = url_str.split("id=")[-1].split("&")[0]
+        # 케이스 2: /d/... 형태
+        elif "/d/" in url_str:
+            file_id = url_str.split("/d/")[1].split("/")[0]
+        
+        if file_id:
+            # uc?id= 대신 thumbnail API 사용 (Cloud 환경에서 훨씬 안정적임)
+            return f"https://drive.google.com/thumbnail?id={file_id}&sz=w600"
+            
     return url_str
 
 
