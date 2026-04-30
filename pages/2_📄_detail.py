@@ -17,10 +17,32 @@ collection_name = st.session_state["selected_collection"]
 # ── 단일 포인트 조회 ──────────────────────────────────────────────
 point = get_point(client, collection_name, point_id)
 
+
+# ── [추가] 유사 제품 추천 함수 ────────────────────────────────────
+def get_similar_products(client, collection: str, pid, limit: int = 4) -> list:
+    """
+    [데이터 엔지니어링 포인트] 벡터 유사도 기반 추천
+    - Qdrant /recommend API: point_id만 넘기면 해당 벡터를 DB에서 직접 참조
+    - 벡터를 꺼내서 직접 계산할 필요 없이 DB 레벨에서 코사인 유사도 계산
+    - size=768 BERT 계열 임베딩 벡터 활용 (메타데이터 필터링과 결합 가능)
+    """
+    r = client.post(
+        f"/collections/{collection}/points/recommend",
+        json={
+            "positive": [pid],      # 이 제품과 유사한 제품 검색
+            "limit": limit,
+            "with_payload": True,
+            "with_vector": False,   # 페이로드만 반환, 벡터 전송 생략
+        }
+    )
+    r.raise_for_status()
+    return r.json().get("result", [])
+
+
 if point:
     product = point.get("payload", {})
 
-    # ── 프로모션 여부에 따른 데이터 분기 로직 ──────────────────────
+    # ── 프로모션 여부에 따른 데이터 분기 로직 ────────────────────
     is_promo = product.get("olive_is_promo", False)
 
     if is_promo:
@@ -56,7 +78,7 @@ if point:
         st.caption(f"카테고리: {product.get('category', 'N/A')}")
 
         st.divider()
-        
+
         sale_price = product.get("sale_price", "가격 정보 없음")
         original_price = product.get("original_price", "정보 없음")
         discount_rate = product.get("discount_rate")
@@ -70,7 +92,7 @@ if point:
             is_discounted = False
 
         delta_str = f"-{discount_rate}% 할인" if is_discounted else None
-        
+
         st.metric(label="판매가", value=sale_price, delta=delta_str, delta_color="inverse")
         st.markdown(f"**정상가:** {original_price}")
 
@@ -88,7 +110,7 @@ if point:
         st.markdown(f"**평점:** ⭐ {avg_rating} (리뷰 {review_count:,}개)")
 
     st.divider()
-    
+
     st.subheader("🎯 최종 추천 분석")
     if is_promo:
         st.success("✅ 이 제품은 '프로모션 혜택'이 적용된 가성비 지표를 보여줍니다.")
@@ -110,11 +132,11 @@ if point:
         else:
             st.write("분석된 키워드가 없습니다.")
 
-    st.write("") 
+    st.write("")
 
     st.subheader("📊 상세 가성비 지표 (Q·E·S)")
     c1, c2, c3 = st.columns(3)
-    
+
     with c1:
         st.markdown("**🛡️ 품질 지수 (Q)**")
         st.progress(float(min(q_val, 1.0)))
@@ -139,7 +161,7 @@ if point:
     st.divider()
 
     st.subheader("💬 주요 리뷰")
-    reviews = [] 
+    reviews = []
     review_collection = collection_name.replace("_products", "_reviews")
 
     review_filter = {
@@ -167,6 +189,72 @@ if point:
             """, unsafe_allow_html=True)
     else:
         st.write("등록된 리뷰가 없습니다.")
+
+    st.divider()
+
+    # ── [추가] 유사 제품 추천 섹션 ───────────────────────────────
+    st.subheader("🔎 비슷한 제품")
+    st.caption("현재 제품과 벡터 유사도가 높은 제품을 추천합니다.")
+
+    try:
+        similar_products = get_similar_products(client, collection_name, point_id, limit=4)
+
+        if similar_products:
+            cols = st.columns(4)
+            for idx, sim_point in enumerate(similar_products):
+                sim_product = sim_point.get("payload", {})
+                sim_id = sim_point.get("id")
+
+                with cols[idx]:
+                    with st.container(border=True):
+                        # 이미지
+                        sim_url = get_displayable_image_url(sim_product.get("olive_image_url"))
+                        st.image(sim_url, use_container_width=True)
+
+                        # 제품명
+                        st.markdown(f"""
+                            <div style="font-size: 13px; font-weight: bold; height: 40px;
+                                        overflow: hidden; text-overflow: ellipsis;
+                                        display: -webkit-box; -webkit-line-clamp: 2;
+                                        -webkit-box-orient: vertical; line-height: 1.4;
+                                        margin-bottom: 8px; color: #222;">
+                                {sim_product.get("olive_name", "제품명 없음")}
+                            </div>
+                        """, unsafe_allow_html=True)
+
+                        # 가성비 점수
+                        sim_score = sim_product.get("final_recommend_score", 0)
+                        st.markdown(f"""
+                            <div style="margin-bottom: 6px;">
+                                <span style="font-size: 12px; color: #666;">📊 가성비 점수</span><br>
+                                <span style="background: linear-gradient(to top, #fff59d 45%, transparent 45%);
+                                             font-size: 16px; font-weight: 900; color: #000;">
+                                    {sim_score * 100:.1f}점
+                                </span>
+                            </div>
+                        """, unsafe_allow_html=True)
+
+                        # 가격
+                        st.markdown(f"""
+                            <div style="margin-bottom: 10px;">
+                                <b style="color: #000; font-size: 15px;">
+                                    {sim_product.get("sale_price", "가격 정보 없음")}
+                                </b>
+                            </div>
+                        """, unsafe_allow_html=True)
+
+                        # 상세 보기 버튼
+                        if st.button("보기", key=f"sim_{sim_id}", use_container_width=True):
+                            st.session_state["selected_product_id"] = sim_id
+                            st.session_state["selected_collection"] = collection_name
+                            st.switch_page("pages/2_📄_detail.py")
+        else:
+            st.info("유사한 제품을 찾을 수 없습니다.")
+
+    except Exception as e:
+        st.info("유사 제품 추천을 불러오는 중 오류가 발생했습니다.")
+
+    st.write("")
 
     if st.button("목록으로 돌아가기"):
         st.switch_page("pages/1_🔎_search.py")
