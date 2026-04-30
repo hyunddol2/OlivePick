@@ -5,7 +5,7 @@ import re
 # 페이지 기본 설정
 st.set_page_config(page_title="스킨 제품 가성비 추천", page_icon="🌿", layout="wide")
 
-# ── Qdrant 연결 설정 ──────────────────────────────────────────────
+# ── Qdrant 연결 설정 (기존 변수 유지) ──────────────────────────────────────────────
 BASE_URL = "https://estranged-simple-unknowing.ngrok-free.dev"
 HEADERS = {"ngrok-skip-browser-warning": "true"}
 
@@ -16,30 +16,20 @@ def get_displayable_image_url(url):
     
     url_str = str(url).strip()
     
-    # 구글 드라이브 링크 처리
     if "drive.google.com" in url_str:
         file_id = ""
-        # 케이스 1: id=... 형태
         if "id=" in url_str:
             file_id = url_str.split("id=")[-1].split("&")[0]
-        # 케이스 2: /d/... 형태
         elif "/d/" in url_str:
             file_id = url_str.split("/d/")[1].split("/")[0]
         
         if file_id:
-            # uc?id= 대신 thumbnail API 사용 (Cloud 환경에서 훨씬 안정적임)
             return f"https://drive.google.com/thumbnail?id={file_id}&sz=w600"
             
     return url_str
 
-
-# ── Qdrant 클라이언트 (httpx 기반) ───────────────────────────────
 @st.cache_resource
 def init_connection():
-    """
-    Qdrant REST API를 감싸는 간단한 클라이언트 객체를 반환합니다.
-    실제 qdrant-client 라이브러리 대신 httpx를 사용하는 팀 환경에 맞춥니다.
-    """
     client = httpx.Client(
         base_url=BASE_URL,
         headers=HEADERS,
@@ -48,19 +38,8 @@ def init_connection():
     )
     return client
 
-
 def scroll_collection(client: httpx.Client, collection: str, filters: dict = None,
                        limit: int = 20, offset: int = None, order_by: str = None):
-    """
-    Qdrant /collections/{name}/points/scroll 엔드포인트를 호출합니다.
-
-    Parameters
-    ----------
-    filters  : Qdrant filter dict (must 조건 등)
-    limit    : 반환할 최대 포인트 수
-    offset   : 페이지네이션용 point id (이전 scroll 결과의 next_page_offset)
-    order_by : 정렬 기준 필드명 (value_score 등), 내림차순 고정
-    """
     body = {
         "limit": limit,
         "with_payload": True,
@@ -76,31 +55,9 @@ def scroll_collection(client: httpx.Client, collection: str, filters: dict = Non
     r = client.post(f"/collections/{collection}/points/scroll", json=body)
     r.raise_for_status()
     data = r.json()
-    # result: {"points": [...], "next_page_offset": ...}
     return data.get("result", {}).get("points", [])
 
-def get_point(client: httpx.Client, collection: str, point_id):
-    """
-    단일 포인트를 ID로 조회합니다. 
-    404 에러 방지를 위해 points/scroll 또는 POST 조회를 사용하는 것이 안전합니다.
-    """
-    # ID가 숫자든 문자열이든 처리할 수 있도록 리스트로 감싸서 POST 요청
-    body = {
-        "ids": [point_id],
-        "with_payload": True,
-        "with_vector": False
-    }
-    r = client.post(f"/collections/{collection}/points", json=body)
-    r.raise_for_status()
-    data = r.json()
-    
-    # result 리스트의 첫 번째 항목 반환
-    results = data.get("result", [])
-    return results[0] if results else None
-
-
 # ── 카테고리 매핑 ─────────────────────────────────────────────────
-# key: 화면 표시명 / value: Qdrant 컬렉션 이름
 category_map = {
     "스킨/토너": "skintoner_products",
     "에센스/세럼/앰플": "essence_products",
@@ -121,12 +78,11 @@ st.header("🏆 카테고리별 가성비 TOP 5")
 for kor_cat, eng_col in category_map.items():
     st.markdown(f"### {kor_cat}")
 
-    # value_score 내림차순으로 상위 5개 조회
     top5_products = scroll_collection(
         client,
         collection=eng_col,
         limit=5,
-        order_by="final_recommend_score", # value_score -> final_recommend_score
+        order_by="final_recommend_score", 
     )
 
     if not top5_products:
@@ -135,34 +91,51 @@ for kor_cat, eng_col in category_map.items():
 
     cols = st.columns(5)
     for idx, point in enumerate(top5_products):
-        # 1. 포인트에서 데이터(payload)와 ID 추출
         product = point.get("payload", {})
-        point_id = point.get("id")  # 버튼 클릭 시 제품을 식별하기 위해 필수입니다.
+        point_id = point.get("id")
 
         with cols[idx]:
-            # 2. 이미지 표시 (DB 필드명: olive_image_url)
-            raw_url = product.get("olive_image_url")
-            display_url = get_displayable_image_url(raw_url)
-            st.image(display_url, use_container_width=True)
+            with st.container(border=True):
+                # 1. 이미지 표시
+                raw_url = product.get("olive_image_url")
+                display_url = get_displayable_image_url(raw_url)
+                st.image(display_url, use_container_width=True)
 
-            # 3. 제품명 표시 (DB 필드명: olive_name)
-            product_name = product.get("olive_name", "제품명 없음")
-            st.write(f"**{product_name[:15]}...**")
+                # 2. 제품명 표시 (폰트 13px -> 15px로 확대)
+                product_name = product.get("olive_name", "제품명 없음")
+                st.markdown(f"""
+                    <div style="font-size: 15px; font-weight: bold; height: 45px; 
+                                overflow: hidden; text-overflow: ellipsis; 
+                                display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; 
+                                line-height: 1.4; margin-bottom: 12px; color: #222;">
+                        {product_name}
+                    </div>
+                """, unsafe_allow_html=True)
 
-            # 4. 가격 표시 처리
-            # DB의 sale_price가 "43,000원" 형태의 문자열이므로, 
-            # 숫자로 변환하지 않고 그대로 출력하는 것이 가장 안전합니다.
-            sale_price = product.get("sale_price")
-            if sale_price:
-                st.write(f"💰 {sale_price}")
-            else:
-                st.write("💰 가격 정보 없음")
+                # 3. 가성비 점수 표시 (라벨 12px->13px / 점수 16px->19px로 확대)
+                rec_score = product.get("final_recommend_score", 0)
+                st.markdown(f"""
+                    <div style="margin-bottom: 8px;">
+                        <span style="font-size: 13px; font-weight: bold; color: #666;">📊 가성비 점수</span><br>
+                        <span style="background: linear-gradient(to top, #fff59d 45%, transparent 45%); 
+                                     font-size: 19px; font-weight: 900; color: #000; padding: 0 2px;">
+                            {rec_score * 100:.1f}점
+                        </span>
+                    </div>
+                """, unsafe_allow_html=True)
 
-            # 5. 상세 페이지 이동 버튼
-            # key 값에 point_id를 포함시켜야 각 버튼이 서로 충돌하지 않습니다.
-            if st.button("자세히 보기", key=f"home_{eng_col}_{point_id}"):
-                st.session_state["selected_product_id"] = point_id
-                st.session_state["selected_collection"] = eng_col
-                st.switch_page("pages/2_📄_detail.py")
+                # 4. 가격 표시 (14px -> 17px로 확대)
+                sale_price = product.get("sale_price", "가격 정보 없음")
+                st.markdown(f"""
+                    <div style="margin-top: 5px; margin-bottom: 12px;">
+                        <b style="color: #000; font-size: 17px;">{sale_price}</b>
+                    </div>
+                """, unsafe_allow_html=True)
 
-    st.write("---") # 카테고리 섹션 간 구분선
+                # 5. 상세 페이지 이동 버튼
+                if st.button("자세히 보기", key=f"home_{eng_col}_{point_id}", use_container_width=True):
+                    st.session_state["selected_product_id"] = point_id
+                    st.session_state["selected_collection"] = eng_col
+                    st.switch_page("pages/2_📄_detail.py")
+
+    st.write("---")
