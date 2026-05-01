@@ -104,11 +104,11 @@ if point:
         st.markdown(f"**용량:** {product.get('volume', '표기 없음')}")
 
         price_per_ml = product.get("olive_price_per_ml")
-        if price_per_ml is not None:
+        if price_per_ml:
             st.markdown(f"**용량당 가격 (1ml):** 약 {int(price_per_ml):,}원")
         else:
             st.markdown("**용량당 가격 (1ml):** 정보 없음")
-
+        
         avg_rating = product.get("olive_rating", 0)
         review_count = product.get("olive_review_count", 0)
         st.markdown(f"**평점:** ⭐ {avg_rating} (리뷰 {review_count:,}개)")
