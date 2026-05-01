@@ -29,10 +29,10 @@ def get_similar_products(client, collection: str, pid, limit: int = 4) -> list:
     r = client.post(
         f"/collections/{collection}/points/recommend",
         json={
-            "positive": [pid],      # 이 제품과 유사한 제품 검색
+            "positive": [pid],
             "limit": limit,
             "with_payload": True,
-            "with_vector": False,   # 페이로드만 반환, 벡터 전송 생략
+            "with_vector": False,
         }
     )
     r.raise_for_status()
@@ -42,15 +42,19 @@ def get_similar_products(client, collection: str, pid, limit: int = 4) -> list:
 if point:
     product = point.get("payload", {})
 
-    # ── 프로모션 여부에 따른 데이터 분기 로직 ────────────────────
+    # ── [수정] promo 필드 존재 여부 확인 후 분기 ─────────────────
+    # olive_is_promo가 True여도 promo_ 필드가 없는 제품이 있음
+    # → promo_recommend_score 존재 여부로 실제 분기 결정
     is_promo = product.get("olive_is_promo", False)
+    has_promo_score = bool(product.get("promo_recommend_score"))
 
-    if is_promo:
+    if is_promo and has_promo_score:
         q_val = product.get("promo_Q_pos_product", 0)
         e_val = product.get("promo_E_pos_product", 0)
         s_val = product.get("promo_S_pos_product", 0)
         f_score = product.get("promo_recommend_score", 0)
     else:
+        # promo 필드 없으면 일반 필드로 fallback
         q_val = product.get("Q_pos_product", 0)
         e_val = product.get("E_pos_product", 0)
         s_val = product.get("S_pos_product", 0)
@@ -112,7 +116,7 @@ if point:
     st.divider()
 
     st.subheader("🎯 최종 추천 분석")
-    if is_promo:
+    if is_promo and has_promo_score:
         st.success("✅ 이 제품은 '프로모션 혜택'이 적용된 가성비 지표를 보여줍니다.")
 
     keywords = product.get("product_keyword", [])
@@ -192,7 +196,7 @@ if point:
 
     st.divider()
 
-    # ── [추가] 유사 제품 추천 섹션 ───────────────────────────────
+    # ── 유사 제품 추천 섹션 ───────────────────────────────────────
     st.subheader("🔎 비슷한 제품")
     st.caption("현재 제품과 벡터 유사도가 높은 제품을 추천합니다.")
 
@@ -207,11 +211,9 @@ if point:
 
                 with cols[idx]:
                     with st.container(border=True):
-                        # 이미지
                         sim_url = get_displayable_image_url(sim_product.get("olive_image_url"))
                         st.image(sim_url, use_container_width=True)
 
-                        # 제품명
                         st.markdown(f"""
                             <div style="font-size: 13px; font-weight: bold; height: 40px;
                                         overflow: hidden; text-overflow: ellipsis;
@@ -222,7 +224,6 @@ if point:
                             </div>
                         """, unsafe_allow_html=True)
 
-                        # 가성비 점수
                         sim_score = sim_product.get("final_recommend_score", 0)
                         st.markdown(f"""
                             <div style="margin-bottom: 6px;">
@@ -234,7 +235,6 @@ if point:
                             </div>
                         """, unsafe_allow_html=True)
 
-                        # 가격
                         st.markdown(f"""
                             <div style="margin-bottom: 10px;">
                                 <b style="color: #000; font-size: 15px;">
@@ -243,7 +243,6 @@ if point:
                             </div>
                         """, unsafe_allow_html=True)
 
-                        # 상세 보기 버튼
                         if st.button("보기", key=f"sim_{sim_id}", use_container_width=True):
                             st.session_state["selected_product_id"] = sim_id
                             st.session_state["selected_collection"] = collection_name
@@ -251,7 +250,7 @@ if point:
         else:
             st.info("유사한 제품을 찾을 수 없습니다.")
 
-    except Exception as e:
+    except Exception:
         st.info("유사 제품 추천을 불러오는 중 오류가 발생했습니다.")
 
     st.write("")
